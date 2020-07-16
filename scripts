@@ -1,0 +1,277 @@
+#! /usr/bin/env python
+import ezdxf
+import math
+import argparse
+
+# parser = argparse.ArgumentParser()
+# parser.add_argument("-s","--slot", default=1, type=int, help="Specify slot on the prototype (sets additional needed opts)")
+# args = parser.parse_args()
+# slot = args.slot
+
+sign = lambda x: x and (1, -1)[x < 0]
+
+# intersection of a circle (x-a)^2+(y-b)^2 = R^2 and a line y = cx+d
+def getLineCircleIntercept(a, b, R, c, d):
+    _sqrt = math.sqrt(-a*a*c*c + 2*a*b*c - 2*a*c*d - b*b + 2*b*d + c*c*R*R - d*d + R*R)
+    x0 = (-_sqrt + a + b*c - c*d)/(c*c + 1)
+    y0 = c*x0 + d
+    x1 = (_sqrt + a + b*c - c*d)/(c*c + 1)
+    y1 = c*x1 + d
+    return x0, y0, x1, y1
+
+# intersection of line (y=ax+b) and (y=cx+d) 
+def getLineLineIntercept(a, b, c, d):
+    x0 = (d - b)/(a - c)
+    y0 = (a*d - b*c)/(a - c)
+    return x0, y0
+
+# line definition based on two points
+def getLineDef(x0, y0, x1, y1):
+    a = (y0 - y1)/(x0 - x1) 
+    b = (x0*y1 - x1*y0)/(x0 - x1)
+    return a, b
+
+def getSector(slot):
+    if (slot==1 or slot==3 or slot==6 or slot==9 or slot==11): sector = 4
+    elif (slot==2 or slot==4 or slot==7 or slot==10): sector = 3
+    elif (slot==5 or slot==8 or slot==12): sector = 5
+    return sector
+
+
+#--------------------------------------------------------------
+def drawSlot(slot):
+    debug = False
+
+    board = "GE21_M1"
+    if (slot<5): board = "GE21_M4"
+
+    block_label = ""
+    if (board=="GE21_M1"): 
+        block_label = "BLOCK385"
+    elif (board=="GE21_M4"): 
+        block_label = "BLOCK80"
+
+
+    # handles for finding lines on the drawing
+    active_area_color = 150 # blue, 50 - yellow, 82 - green, 222 - purple, 10 - red, 40 - orange
+    chamber_cover_color = 1
+    segmentation_color = 3
+
+    nConnPerRow = 6
+    via_radius = 0.3
+    nStripsPerConn = 128
+    if (slot==3 or slot==8 or slot==12): nStripsPerConn=nStripsPerConn/2
+    gap = 0.2
+    if (slot==2 or slot==6): gap=0.3
+    elif (slot==7): gap=0.4
+
+
+    # define segment by the highest point in Y
+    segm_def = []
+    if (board=="GE21_M1"):
+        segm_def = [
+          [1365.5, 244.462221+gap],
+          [1561.0, 279.4608+gap],
+          [1756.5, 314.462022+gap]
+        ]
+    elif (board=="GE21_M4"):
+        segm_def = [
+          [2726.0, 488.029303+gap],
+          [2962.0, 530.28+gap],
+          [3198.0, 572.530342+gap]
+        ]
+
+    # adjust segments for slots with half strips
+    if (slot==3 or slot==8 or slot==9 or slot==12):
+        _a, _b = getLineDef(segm_def[0][0], segm_def[0][1], segm_def[-1][0], segm_def[-1][1])
+        _mid = (segm_def[0][0]+segm_def[1][0])/2
+        segm_def.insert(1,[_mid, _a*_mid+_b])
+
+    # don't draw the full drawing for each slot
+    if (slot==3 or slot==4 or slot>7):
+        segm_def = segm_def[:-1]    
+    else:
+        segm_def = segm_def[1:]
+
+    nEtaSegm = len(segm_def)-1
+
+    # specify where to place the vias in each segment
+    via_row_x = []
+    if (slot==1 or slot==2):
+        via_row_x = [segm_def[-1][0]-80]
+    elif (slot==3 or slot==8 or slot==9):
+        via_row_x = [segm_def[1][0]-1, segm_def[1][0]+1]
+    elif (slot==9):
+        via_row_x = [segm_def[1][0]-2, segm_def[1][0]+2]
+    elif (slot==4 or slot==10):
+        via_row_x = [segm_def[0][0]+10]
+    elif (slot==5 or slot==6 or slot==7):
+        via_row_x = [segm_def[-1][0]-80]
+    elif (slot==11):
+        via_row_x = [(segm_def[0][0]+segm_def[1][0])/2]
+    elif (slot==12):
+        via_row_x = [segm_def[1][0]-25, segm_def[1][0]+25]
+         
+
+    original_dwg = ezdxf.readfile("in/"+board+"_outline.dxf")
+    dwg = ezdxf.new(dxfversion=original_dwg.dxfversion)
+    msp = dwg.modelspace()
+    
+    dwg.layers.new(name='Strip gaps', dxfattribs={'linetype': 'Continuous', 'color': 160})
+    dwg.layers.new(name='Traces', dxfattribs={'linetype': 'Continuous', 'color': 40})
+    dwg.layers.new(name='Strips', dxfattribs={'linetype': 'DASHED', 'color': 222})
+    dwg.layers.new(name='Vias', dxfattribs={'linetype': 'Continuous', 'color': 10})
+    strip_block = dwg.blocks.new(name='SLOT'+str(slot))
+
+    # declaring linetypes that are not default, but were used in the original
+    # if not present, AutoCAD would not open the file...
+    my_line_types = [
+        ("DASHSPACE", "Dashspace - - - - - - - - - - - - - - - -", [10.0, 5.0, -5.0]),
+        ("DOT", "Dot . . . . . . . . . . . . . . . . . . . ", [5.0, 0.0, -5.0]),
+    ]
+    for name, desc, pattern in my_line_types:
+        if name not in dwg.linetypes:
+            dwg.linetypes.new(name=name, dxfattribs={'description': desc, 'pattern': pattern})
+
+    # copy board from the original DXF and paste it into the new one
+    importer = ezdxf.Importer(original_dwg, dwg)
+    importer.import_blocks(query=block_label, conflict='discard')
+    board_rotation = -90.
+    msp.add_blockref(block_label,(0,0), dxfattribs={
+            'xscale': 1.,
+            'yscale': 1.,
+            'rotation': board_rotation
+        })
+
+    # building strips
+    me0_maxy = 0
+    if (board == 'ME0'): # do not extrapolate strips all the way due to irregular shape
+        _c,_d = getLineDef(segm_def[0][0], segm_def[0][1], segm_def[-3][0], segm_def[-3][1])
+        me0_maxy = _c*segm_def[-1][0]+_d
+
+    gap_pts_lo, gap_pts_hi = [], []
+    gap_line_def = []
+    str_line_def = []
+    width_lo = segm_def[0][1]*2
+    width_hi = segm_def[-1][1]*2
+    if (board=='ME0'):
+        width_hi = me0_maxy*2
+
+    str_width_lo = (width_lo - (nStripsPerConn*nConnPerRow+1)*gap)/(nStripsPerConn*nConnPerRow)
+    str_width_hi = (width_hi - (nStripsPerConn*nConnPerRow+1)*gap)/(nStripsPerConn*nConnPerRow)
+    for i in range(nStripsPerConn*nConnPerRow+1):
+        # gaps
+        gap_pts_lo.append((segm_def[0][0], i*(str_width_lo+gap) + gap/2. - width_lo/2., gap, gap))
+        # high end of gaps
+        gap_pts_hi.append((segm_def[-1][0], i*(str_width_hi+gap) + gap/2. - width_hi/2., gap, gap))
+        # also need the line definition for finding overlaps with vias later
+        _a, _b = getLineDef(gap_pts_lo[-1][0], gap_pts_lo[-1][1], gap_pts_hi[-1][0], gap_pts_hi[-1][1])
+        gap_line_def.append([_a,_b])
+
+
+    # strips
+    for i in range(nStripsPerConn*nConnPerRow):
+        str_lo_x = segm_def[0][0]
+        str_lo_y = i*(str_width_lo+gap) + gap + str_width_lo/2. - width_lo/2.
+        str_hi_x = segm_def[-1][0]
+        str_hi_y = i*(str_width_hi+gap) + gap + str_width_hi/2. - width_hi/2.
+        _a,_b = getLineDef(str_lo_x, str_lo_y, str_hi_x, str_hi_y)
+        str_line_def.append([_a, _b])
+        if (debug): strip_block.add_lwpolyline([(0, _b),(1500, _a*1500+_b)], dxfattribs={'layer': 'Strip gaps'})
+
+    # add via rows - saving center positions for later
+    via_centers = []
+    for iseg in range(nEtaSegm):
+        via_centers.append([])
+        # determine strip width at desired radius for lowest lying strip, here the via would be in the narrowest portion
+        this_width = 2*(str_line_def[-1][0]*via_row_x[iseg]+str_line_def[-1][1])
+        str_width = (this_width - (nStripsPerConn*nConnPerRow+1)*gap)/(nStripsPerConn*nConnPerRow*1.)    
+        for istr in range(nStripsPerConn*nConnPerRow):
+            # get via center
+            via_x = via_row_x[iseg]
+            via_y = 0
+            if (slot==11):
+                if (istr%2==0): via_x +=25
+                else: via_x -=25
+            if (str_width>2*(via_radius)): # single row
+                via_y = via_x*str_line_def[istr][0]+str_line_def[istr][1]
+            else: # strips too thin, zig-zag
+                if (istr%2==0):
+                    via_x = via_x-1.25*via_radius
+                    via_y = via_x*str_line_def[istr][0]+str_line_def[istr][1]
+                else:
+                    via_x = via_x+1.25*via_radius
+                    via_y = via_x*str_line_def[istr][0]+str_line_def[istr][1]
+            via_centers[-1].append((via_x,via_y))
+            # draw vias for reference
+            if (istr>=(getSector(slot)-1)*nStripsPerConn and istr<getSector(slot)*nStripsPerConn):
+                strip_block.add_circle((via_x, via_y), via_radius, dxfattribs={'layer': 'Vias'})
+
+
+    # draw gaps
+    for istr in range(nStripsPerConn*nConnPerRow):
+        # list of points to  define strip gap
+        this_str = [gap_pts_lo[istr]]
+        # loop over eta segments to find via overlaps
+        for iseg in range(nEtaSegm):
+            this_width = 2*(str_line_def[-1][0]*via_row_x[iseg]+str_line_def[-1][1])
+            str_width = (this_width - (nStripsPerConn*nConnPerRow+1)*gap)/(nStripsPerConn*nConnPerRow*1.) 
+            # overlaps
+            if (str_width<(2*via_radius)):
+                # adding gap/2 to radius to account for thickness of gap
+                via_eff_radius = via_radius+gap/2.
+                # intersection with last via 
+                _x2,_y2,_x3,_y3,_x4,_y4,_x5,_y5 = -1e10,-1e10,-1e10,-1e10,-1e10,-1e10,-1e10,-1e10
+                if (istr>0):
+                    _x2,_y2,_x3,_y3 = getLineCircleIntercept(via_centers[iseg][istr-1][0],via_centers[iseg][istr-1][1],via_eff_radius,gap_line_def[istr][0], gap_line_def[istr][1])
+                    dist = 0.5*math.sqrt((_x3-_x2)*(_x3-_x2) + (_y3-_y2)*(_y3-_y2))
+                    bulge1 = -(via_eff_radius - math.sqrt(via_eff_radius*via_eff_radius - dist*dist))/dist
+                # intersection with next via
+                if istr<(nStripsPerConn*nConnPerRow-1):
+                    _x4,_y4,_x5,_y5 = getLineCircleIntercept(via_centers[iseg][istr][0],via_centers[iseg][istr][1],via_eff_radius,gap_line_def[istr][0], gap_line_def[istr][1])
+                    dist = 0.5*math.sqrt((_x5-_x4)*(_x5-_x4) + (_y5-_y4)*(_y5-_y4))
+                    bulge2 = (via_eff_radius - math.sqrt(via_eff_radius*via_eff_radius - dist*dist))/dist
+                # by definition of the intercept function _x2<_x3 and _x4<_x5
+                if (_x2<_x4):
+                    if (istr>0):
+                        this_str.append((_x2, _y2, gap, gap, bulge1))
+                        this_str.append((_x3, _y3, gap, gap))
+                    if (istr<nStripsPerConn*nConnPerRow-1):
+                        this_str.append((_x4, _y4, gap, gap, bulge2))
+                        this_str.append((_x5, _y5, gap, gap))
+                else:
+                    if (istr<nStripsPerConn*nConnPerRow-1):
+                        this_str.append((_x4, _y4, gap, gap, bulge2))
+                        this_str.append((_x5, _y5, gap, gap))    
+                    if (istr>0):
+                        this_str.append((_x2, _y2, gap, gap, bulge1))
+                        this_str.append((_x3, _y3, gap, gap))                
+
+        # add last point and draw gap
+        this_str.append(gap_pts_hi[istr])
+        if (istr>=(getSector(slot)-1)*nStripsPerConn and istr<(getSector(slot)*nStripsPerConn+1)):
+            strip_block.add_lwpolyline(this_str, dxfattribs={'layer': 'Strip gaps'})
+
+    # gaps between eta segments
+    for iseg in range(nEtaSegm+1):
+        _x = segm_def[iseg][0]
+        _y1 = _x*gap_line_def[getSector(slot)*nStripsPerConn][0] + gap_line_def[getSector(slot)*nStripsPerConn][1]
+        _y2 = _x*gap_line_def[(getSector(slot)-1)*nStripsPerConn][0] + gap_line_def[(getSector(slot)-1)*nStripsPerConn][1]
+        if (iseg==0):
+            strip_block.add_lwpolyline([(_x-gap/2,_y1, gap, gap), (_x-gap/2, _y2, gap, gap)], dxfattribs={'layer': 'Strip gaps'})
+        elif (iseg==nEtaSegm):   
+            strip_block.add_lwpolyline([(_x+gap/2,_y1, gap, gap), (_x+gap/2, _y2, gap, gap)], dxfattribs={'layer': 'Strip gaps'})
+        else:
+            strip_block.add_lwpolyline([(_x,_y1, gap, gap), (_x, _y2, gap, gap)], dxfattribs={'layer': 'Strip gaps'})
+
+    # add strip block to drawing
+    msp.add_blockref('SLOT'+str(slot),(0,0), dxfattribs={
+            'xscale': 1.,
+            'yscale': 1.,
+            'rotation': 0
+        })
+
+    outfile = "out/"+board
+    outfile += "_s"+str(slot)+".dxf"
+    dwg.saveas(outfile)
+    return outfile
