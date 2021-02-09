@@ -1,0 +1,69 @@
+pragma solidity ^0.4.11;
+import "./usingOraclize.sol";  //Importing Oraclizecontract TestOraclizeCall is usingOraclize {     //Constructor
+     function TestOraclizeCall() { 
+         OAR= OraclizeAddrResolverI(0xCF79A9f347bA6F9a174972aC635Ae356B4B9f060);
+  pragma solidity ^0.4.16;
+
+import "./usingOraclize.sol";
+
+contract TestOraclizeCall is usingOraclize {
+
+      // oraclize callback types:
+      enum oraclizeState { ForUSD, ForDistance }
+
+      //Events
+      event LOG_OraclizeCallbackForDistance(
+                string result,
+      );
+
+      event LOG_OraclizeCallbackForWeatherCondition(
+                string result,
+      );
+
+       // the oraclize callback structure: we use several oraclize calls.
+       // all oraclize calls will result in a common callback to __callback(...).
+       // to keep track of the different querys we have to introduce this struct.
+      struct oraclizeCallback {
+            // for which purpose did we call? {ForUSD | ForDistance}
+            oraclizeState oState;
+      }
+      // Lookup state from queryIds
+      mapping (bytes32 => oraclizeCallback) public oraclizeCallbacks;
+
+    
+      // constructor
+      function TestOraclizeCall() {
+              OAR = OraclizeAddrResolverI(0xCF79A9f347bA6F9a174972aC635Ae356B4B9f060);
+             
+      }
+      //Function for distance retrieval
+      function distanceRetrieve() payable returns(bool sufficient) {
+            bytes32 queryId = oraclize_query(10,"URL",strConcat("json(http://www.distance24.org/route.json?stops=us).distance"));
+            oraclizeCallbacks[queryId] = oraclizeCallback(oraclizeState.ForDistance);
+            return true;
+      }
+
+      function update() payable returns(bool sufficient) {
+         bytes32 queryId =  oraclize_query("URL","json(https://min-api.cryptocompare.com/data/price?fsym=ETH&tsyms=USD).USD");
+         oraclizeCallbacks[queryId] = oraclizeCallback(oraclizeState.ForUSD);
+         return true;
+      }
+
+
+      //Function callback
+      function __callback(bytes32 myid, string result) {
+
+                 if (msg.sender != oraclize_cbAddress()) throw;
+                 oraclizeCallback memory o = oraclizeCallbacks[myid];
+                 if (o.oState == oraclizeState.ForDistance) {
+                               LOG_OraclizeCallbackForDistance(result);
+                             
+               }
+               else if(o.oState == oraclizeState.ForUSD) {
+                               LOG_OraclizeCallbackForUSD(result);
+               }
+
+      }
+
+
+}
