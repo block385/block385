@@ -1,3 +1,4 @@
+//node bridge -H localhost:8545 -a 1
 contract OraclizeAddrResolver {
 
     address public addr;
